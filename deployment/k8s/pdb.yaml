@@ -6,7 +6,7 @@ metadata:
   name: fusion-electronics-frontend-pdb
   namespace: fusion-ecommerce
 spec:
-  minAvailable: 2
+  maxUnavailable: 1
   selector:
     matchLabels:
       app: fusion-electronics
@@ -21,7 +21,7 @@ metadata:
   name: fusion-electronics-backend-pdb
   namespace: fusion-ecommerce
 spec:
-  minAvailable: 2
+  maxUnavailable: 1
   selector:
     matchLabels:
       app: fusion-electronics

@@ -1,5 +1,5 @@
 # --- 1) Deps stage: install only backend workspace using the ROOT lockfile ---
-FROM node:18-alpine AS deps
+FROM node:18-bullseye-slim AS deps
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ RUN npm ci -w backend --include-workspace-root=false --omit=dev
 
 
 # --- 2) Runtime stage ---
-FROM node:18-alpine
+FROM node:18-bullseye-slim
 
 # Provide a human-readable description for the image
 LABEL org.opencontainers.image.description="Fusion Electronics Backend – a backend server for Fusion Electronics, a MERN-stack e-commerce website."
@@ -32,8 +32,8 @@ COPY backend/ backend/
 # Run from backend folder
 WORKDIR /app/backend
 
-# Expose the port your app listens on
-EXPOSE 3000
+# Expose the port your app listens on by default
+EXPOSE 8000
 
 # Start your app
 CMD ["node", "index.js"]

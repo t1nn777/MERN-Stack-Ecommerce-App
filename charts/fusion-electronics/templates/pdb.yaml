@@ -1,0 +1,31 @@
+{{- if .Values.pdb.enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "fusion-electronics.frontendName" . }}
+  namespace: {{ include "fusion-electronics.namespace" . }}
+  labels:
+    {{- include "fusion-electronics.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "fusion-electronics.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "fusion-electronics.backendName" . }}
+  namespace: {{ include "fusion-electronics.namespace" . }}
+  labels:
+    {{- include "fusion-electronics.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "fusion-electronics.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+{{- end }}

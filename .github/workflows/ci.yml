@@ -1,188 +1,196 @@
-name: CI/CD Pipeline for Fusion Electronics App
+name: Fusion Electronics CI/CD
 
 on:
   push:
-    branches: [ master ]
+    branches:
+      - main
+      - master
   pull_request:
-    branches: [ master ]
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
+env:
+  REGISTRY: ghcr.io
+  FRONTEND_IMAGE_NAME: mern-ecom-frontend
+  BACKEND_IMAGE_NAME: mern-ecom-backend
+  HELM_RELEASE: fusion-electronics
+  HELM_NAMESPACE: fusion-ecommerce
+  CHART_PATH: charts/fusion-electronics
+
 jobs:
-  formatting:
-    name: "🔧 Install, Lint & Format"
+  test:
+    name: Build and test
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Use Node.js 18
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 18
+          cache: npm
 
-      - name: Install dependencies (root)
-        run: npm install
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Run Prettier
-        run: npm run format
+      - name: Build frontend
+        run: npm run build
 
-  backend:
-    name: "✅ Backend Tests"
-    needs: formatting
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Test frontend
+        run: npm test -- src/tests --runInBand
 
-      - name: Use Node.js 18
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
+      - name: Test backend
+        run: npm test --workspace backend -- --runInBand
 
-      - name: Install & Test Backend
-        working-directory: backend
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Validate Helm chart
         run: |
-          npm install
-          npm test
-
-  frontend:
-    name: "🌐 Frontend Tests"
-    needs: formatting
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [18, 20]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v3
-        with:
-          node-version: ${{ matrix.node-version }}
-
-      - name: Install & Test Frontend
-        run: |
-          npm install
-          npm test
-
-  recommendation-tests:
-    name: "🤖 Recommendation Service Sanity"
-    runs-on: ubuntu-latest
-    needs: formatting
-    strategy:
-      matrix:
-        scenario: [ cold-start, diversity, performance ]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Use Node.js 18
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
-
-      - name: Install Dependencies
-        working-directory: backend
-        run: npm install
-
-      - name: Run Scenario ${{ matrix.scenario }}
-        working-directory: backend
-        run: |
-          echo "🧪 Running recommendation test for scenario: ${{ matrix.scenario }}"
-          # trivial matrix-based test: compute a sample similarity matrix
-          node -e "\
-            const scenarios = { \
-              'cold-start': [[0,1],[1,0]], \
-              'diversity': [[1,0.5],[0.5,1]], \
-              'performance': [[1,1],[1,1]] \
-            }; \
-            console.table(scenarios['${{ matrix.scenario }}']);\
-          "
-
-  complete:
-    name: "🎉 All Tests Passed"
-    needs:
-      - backend
-      - frontend
-      - recommendation-tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Notify success
-        run: echo "✅ Backend, frontend, and recommendation tests all passed."
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+          helm dependency update "${CHART_PATH}"
+          helm lint "${CHART_PATH}"
+          helm template "${HELM_RELEASE}" "${CHART_PATH}" --namespace "${HELM_NAMESPACE}" > /tmp/fusion-electronics-rendered.yaml
 
   docker:
-    name: "🐳 Build & Push Docker Images"
-    needs: complete
+    name: Build and push images
     runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name != 'pull_request'
     permissions:
       contents: read
-      packages: write   # for GHCR
+      packages: write
+    outputs:
+      image_owner: ${{ steps.image-meta.outputs.image_owner }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
+      - name: Normalize image owner
+        id: image-meta
+        shell: bash
+        run: |
+          image_owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "IMAGE_OWNER=${image_owner}" >> "$GITHUB_ENV"
+          echo "image_owner=${image_owner}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & push backend image
-        uses: docker/build-push-action@v3
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.image-meta.outputs.image_owner }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ steps.image-meta.outputs.image_owner }}/${{ env.FRONTEND_IMAGE_NAME }}:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./backend/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/mern-ecom-backend:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/mern-ecom-backend:latest
+            ${{ env.REGISTRY }}/${{ steps.image-meta.outputs.image_owner }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ steps.image-meta.outputs.image_owner }}/${{ env.BACKEND_IMAGE_NAME }}:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
 
-      - name: Build & push frontend image
-        uses: docker/build-push-action@v3
-        with:
-          context: ./
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/mern-ecom-frontend:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/mern-ecom-frontend:latest
-
-  summary:
-    name: "🎉 Pipeline Done"
-    needs:
-      - docker
+  helm-deploy:
+    name: Deploy with Helm
     runs-on: ubuntu-latest
+    needs: docker
+    if: github.event_name != 'pull_request'
+    environment: production
+    env:
+      KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+      PINECONE_HOST: ${{ secrets.PINECONE_HOST }}
+      PINECONE_INDEX: ${{ secrets.PINECONE_INDEX }}
+      GOOGLE_AI_API_KEY: ${{ secrets.GOOGLE_AI_API_KEY }}
+      WEAVIATE_HOST: ${{ secrets.WEAVIATE_HOST }}
+      WEAVIATE_API_KEY: ${{ secrets.WEAVIATE_API_KEY }}
     steps:
-      - name: CI/CD Pipeline Summary (log)
+      - name: Check deploy secrets
+        id: deploy-gate
+        shell: bash
         run: |
-          echo "::group::📝 Fusion Electronics CI/CD Pipeline Summary"
-          echo ""
-          echo "- 🔧 **Formatting:** ✅"
-          echo "- ✅ **Backend Tests (multi-OS):** ✅"
-          echo "- 🌐 **Frontend Tests (Node 18 & 20):** ✅"
-          echo "- 🤖 **Recommendation Service Sanity:** ✅"
-          echo "- 🐳 **Docker Build & Push:** ✅"
-          echo ""
-          echo "✅ All stages completed successfully!"
-          echo "::endgroup::"
+          if [ -z "$KUBE_CONFIG_DATA" ]; then
+            echo "KUBE_CONFIG_DATA is not configured; skipping Helm deploy."
+            echo "deploy_enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-      - name: Write Summary to GitHub Step Summary
+          if [ -z "$JWT_SECRET" ]; then
+            echo "::error::JWT_SECRET is required when KUBE_CONFIG_DATA is configured."
+            exit 1
+          fi
+
+          echo "deploy_enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.deploy-gate.outputs.deploy_enabled == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        if: steps.deploy-gate.outputs.deploy_enabled == 'true'
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubeconfig
+        if: steps.deploy-gate.outputs.deploy_enabled == 'true'
+        shell: bash
         run: |
-          {
-            echo "## 🎉 Fusion Electronics CI/CD Pipeline Complete"
-            echo ""
-            echo "| Item                             | Status                                              |"
-            echo "| -------------------------------- | --------------------------------------------------- |"
-            echo "| **Formatting**                   | ✅ Installed, linted & formatted                     |"
-            echo "| **Backend Tests (multi-OS)**     | ✅ ubuntu·windows·macOS                              |"
-            echo "| **Frontend Tests (Node 18 & 20)**| ✅ Node 18·Node 20                                   |"
-            echo "| **Recommendation Service**       | ✅ cold-start·diversity·performance                   |"
-            echo "| **Docker Build & Push**          | ✅ backend & frontend images pushed to GHCR           |"
-            echo ""
-            echo "**Completed at** $(date -u '+%Y-%m-%dT%H:%M:%SZ') UTC"
-          } >> $GITHUB_STEP_SUMMARY
+          mkdir -p "$HOME/.kube"
+          echo "$KUBE_CONFIG_DATA" | base64 --decode > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Build Helm dependencies
+        if: steps.deploy-gate.outputs.deploy_enabled == 'true'
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+          helm dependency update "${CHART_PATH}"
+
+      - name: Deploy chart
+        if: steps.deploy-gate.outputs.deploy_enabled == 'true'
+        shell: bash
+        run: |
+          helm upgrade --install "${HELM_RELEASE}" "${CHART_PATH}" \
+            --namespace "${HELM_NAMESPACE}" \
+            --create-namespace \
+            --set frontend.image.repository="${REGISTRY}/${{ needs.docker.outputs.image_owner }}/${FRONTEND_IMAGE_NAME}" \
+            --set frontend.image.tag="${GITHUB_SHA}" \
+            --set backend.image.repository="${REGISTRY}/${{ needs.docker.outputs.image_owner }}/${BACKEND_IMAGE_NAME}" \
+            --set backend.image.tag="${GITHUB_SHA}" \
+            --set-string secrets.JWT_SECRET="${JWT_SECRET}" \
+            --set-string secrets.PINECONE_API_KEY="${PINECONE_API_KEY}" \
+            --set-string secrets.PINECONE_HOST="${PINECONE_HOST}" \
+            --set-string secrets.PINECONE_INDEX="${PINECONE_INDEX:-ecommerce-products}" \
+            --set-string secrets.GOOGLE_AI_API_KEY="${GOOGLE_AI_API_KEY}" \
+            --set-string secrets.WEAVIATE_HOST="${WEAVIATE_HOST}" \
+            --set-string secrets.WEAVIATE_API_KEY="${WEAVIATE_API_KEY}" \
+            --wait \
+            --timeout 10m
+
+      - name: Show rollout status
+        if: steps.deploy-gate.outputs.deploy_enabled == 'true'
+        run: |
+          kubectl get pods -n "${HELM_NAMESPACE}"
+          kubectl get ingress -n "${HELM_NAMESPACE}"

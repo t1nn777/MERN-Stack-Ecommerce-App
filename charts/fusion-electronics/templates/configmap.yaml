@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fusion-electronics.configName" . }}
+  namespace: {{ include "fusion-electronics.namespace" . }}
+  labels:
+    {{- include "fusion-electronics.labels" . | nindent 4 }}
+data:
+  NODE_ENV: {{ .Values.backend.env.NODE_ENV | quote }}
+  PORT: {{ .Values.backend.env.PORT | quote }}
+  SKIP_SEED_ON_START: {{ .Values.backend.env.SKIP_SEED_ON_START | quote }}
+  FORCE_SEED_ON_START: {{ .Values.backend.env.FORCE_SEED_ON_START | quote }}
+  PINECONE_INDEX: {{ .Values.backend.env.PINECONE_INDEX | quote }}
+  PINECONE_NAMESPACE: {{ .Values.backend.env.PINECONE_NAMESPACE | quote }}
+  PINECONE_PURGE_ON_SYNC: {{ .Values.backend.env.PINECONE_PURGE_ON_SYNC | quote }}
+  RECOMMENDATION_PREFER_WEAVIATE: {{ .Values.backend.env.RECOMMENDATION_PREFER_WEAVIATE | quote }}

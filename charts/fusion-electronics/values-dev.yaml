@@ -1,0 +1,40 @@
+frontend:
+  image:
+    repository: ghcr.io/your-org/mern-ecom-frontend
+    tag: latest
+
+backend:
+  image:
+    repository: ghcr.io/your-org/mern-ecom-backend
+    tag: latest
+  env:
+    SKIP_SEED_ON_START: "false"
+
+mongodb:
+  enabled: true
+  auth:
+    enabled: false
+  primary:
+    persistence:
+      enabled: false
+
+ingress:
+  enabled: true
+  hosts:
+    - host: fusion-electronics.local
+      paths:
+        - path: /api-docs
+          pathType: Prefix
+          service: backend
+        - path: /api
+          pathType: Prefix
+          service: backend
+        - path: /
+          pathType: Prefix
+          service: frontend
+
+autoscaling:
+  enabled: false
+
+pdb:
+  enabled: false

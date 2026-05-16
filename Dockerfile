@@ -5,14 +5,13 @@ LABEL org.opencontainers.image.description="Fusion Electronics Ecommerce Website
 
 WORKDIR /app
 
-# Install deps
-COPY . .
-RUN npm ci
+COPY package.json package-lock.json ./
+COPY craco.config.js babel.config.js jsconfig.json ./
+RUN npm ci --workspaces=false
 
-# Copy sources and build
 COPY public ./public
-
-COPY src    ./src
+COPY src ./src
+COPY setupProxy.js ./setupProxy.js
 
 RUN npm run build
 

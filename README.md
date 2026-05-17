@@ -37,7 +37,7 @@ docker compose up --build
 Backend can cac bien moi truong chinh:
 
 ```env
-MONGO_URI=mongodb://mongodb:27017/Ecommerce-Products
+MONGO_URI=mongodb://fusion-electronics-mongodb:27017/Ecommerce-Products
 JWT_SECRET=change-me
 PORT=8000
 SKIP_SEED_ON_START=false
@@ -45,7 +45,6 @@ PINECONE_API_KEY=
 PINECONE_HOST=
 PINECONE_INDEX=
 PINECONE_NAMESPACE=ecommerce-products
-GOOGLE_AI_API_KEY=
 ```
 
 Pinecone/Google AI co the de trong khi test luong co ban; backend co fallback cho recommendation khi vector sync loi.
@@ -74,12 +73,13 @@ GitHub Secrets can thiet:
 - `KUBE_CONFIG_DATA`: kubeconfig base64.
 - `JWT_SECRET`: JWT signing secret cho backend.
 
+`MONGO_URI` khong can tao GitHub Secret khi dung MongoDB trong chart; Helm se tu sinh URI theo service K8s noi bo.
+
 Optional:
 
 - `PINECONE_API_KEY`
 - `PINECONE_HOST`
 - `PINECONE_INDEX`
-- `GOOGLE_AI_API_KEY`
 - `WEAVIATE_HOST`
 - `WEAVIATE_API_KEY`
 

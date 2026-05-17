@@ -14,8 +14,7 @@ This chart deploys the Fusion Electronics MERN app with a React frontend, Expres
 helm dependency update charts/fusion-electronics
 helm upgrade --install fusion-electronics charts/fusion-electronics \
   --namespace fusion-ecommerce \
-  --create-namespace \
-  -f charts/fusion-electronics/values-dev.yaml
+  --create-namespace
 ```
 
 Add this host entry for a local ingress test:
@@ -24,15 +23,16 @@ Add this host entry for a local ingress test:
 <INGRESS_IP> fusion-electronics.local
 ```
 
-## Production Override
+## Override For Your Lab
 
-Copy `values-prod.example.yaml`, replace image repositories, image tags, secrets, and ingress hosts, then deploy:
+Edit `values.yaml` directly for a VMware lab, or pass overrides at deploy time:
 
 ```bash
 helm upgrade --install fusion-electronics charts/fusion-electronics \
   --namespace fusion-ecommerce \
   --create-namespace \
-  -f my-prod-values.yaml
+  --set frontend.image.repository=ghcr.io/YOUR_ORG/mern-ecom-frontend \
+  --set backend.image.repository=ghcr.io/YOUR_ORG/mern-ecom-backend
 ```
 
 ## GitHub Actions Secrets
@@ -47,9 +47,14 @@ Optional:
 - `PINECONE_API_KEY`
 - `PINECONE_HOST`
 - `PINECONE_INDEX`
-- `GOOGLE_AI_API_KEY`
 - `WEAVIATE_HOST`
 - `WEAVIATE_API_KEY`
+
+`MONGO_URI` is generated automatically for the MongoDB service created by this chart, for example:
+
+```text
+mongodb://fusion-electronics-mongodb:27017/Ecommerce-Products
+```
 
 Create `KUBE_CONFIG_DATA` from a local kubeconfig:
 

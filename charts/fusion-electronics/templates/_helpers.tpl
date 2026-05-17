@@ -61,7 +61,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "fusion-electronics.mongoUri" -}}
-{{- if .Values.mongodb.enabled -}}
 {{- $host := include "fusion-electronics.mongodbName" . -}}
 {{- $port := .Values.mongodb.service.ports.mongodb | default 27017 -}}
 {{- $db := .Values.mongodb.database | default "Ecommerce-Products" -}}
@@ -71,8 +70,5 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "mongodb://%s:%s@%s:%v/%s" $user $pass $host $port $db -}}
 {{- else -}}
 {{- printf "mongodb://%s:%v/%s" $host $port $db -}}
-{{- end -}}
-{{- else -}}
-{{- required "secrets.MONGO_URI is required when mongodb.enabled=false" .Values.secrets.MONGO_URI -}}
 {{- end -}}
 {{- end -}}

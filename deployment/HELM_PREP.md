@@ -6,7 +6,7 @@
 | --- | --- | --- | --- | --- |
 | Frontend | `src/`, `public/` | root `Dockerfile` | `80` | `deployment/k8s/frontend-*.yaml` |
 | Backend API | `backend/` | `backend/Dockerfile` | `8000` | `deployment/k8s/backend-*.yaml` |
-| MongoDB | external service or chart dependency | Bitnami MongoDB recommended | `27017` | configure via `MONGO_URI` secret |
+| MongoDB | chart dependency | Bitnami MongoDB | `27017` | backend uses generated in-cluster service URI |
 
 ## Helm Chart Shape
 
@@ -16,8 +16,6 @@ Implemented chart layout:
 charts/fusion-electronics/
   Chart.yaml
   values.yaml
-  values-dev.yaml
-  values-prod.example.yaml
   README.md
   templates/
     namespace.yaml
@@ -39,7 +37,7 @@ charts/fusion-electronics/
 - `frontend.image.repository`, `frontend.image.tag`, `frontend.replicaCount`
 - `backend.image.repository`, `backend.image.tag`, `backend.replicaCount`
 - `backend.env.PORT`, `backend.env.NODE_ENV`, `backend.env.SKIP_SEED_ON_START`
-- `secrets.MONGO_URI`, `secrets.JWT_SECRET`, `secrets.PINECONE_API_KEY`, `secrets.GOOGLE_AI_API_KEY`
+- `secrets.JWT_SECRET`, `secrets.PINECONE_API_KEY`
 - `ingress.enabled`, `ingress.className`, `ingress.hosts`, `ingress.tls`
 - `autoscaling.enabled`, min/max replicas, CPU/memory targets
 - `networkPolicy.enabled`

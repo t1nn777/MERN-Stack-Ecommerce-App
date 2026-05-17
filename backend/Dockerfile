@@ -23,8 +23,10 @@ LABEL org.opencontainers.image.description="Fusion Electronics Backend – a bac
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Bring in hoisted node_modules (contains backend deps)
+# Bring in workspace dependencies. npm may place workspace packages in both
+# root node_modules and backend/node_modules depending on package metadata.
 COPY --from=deps /app/node_modules /app/node_modules
+COPY --from=deps /app/backend/node_modules /app/backend/node_modules
 
 # Copy backend sources
 COPY backend/ backend/

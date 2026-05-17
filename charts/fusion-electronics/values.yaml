@@ -3,10 +3,13 @@ namespaceOverride: fusion-ecommerce
 nameOverride: ""
 fullnameOverride: ""
 
+imagePullSecrets:
+  - name: ghcr-secret
+
 frontend:
   replicaCount: 1
   image:
-    repository:  ghcr.io/t1nn777/mern-ecom-frontend
+    repository: ghcr.io/t1nn777/mern-ecom-frontend
     tag: latest
     pullPolicy: IfNotPresent
   service:
@@ -29,7 +32,7 @@ frontend:
 backend:
   replicaCount: 1
   image:
-    repository:  ghcr.io/t1nn777/mern-ecom-backend
+    repository: ghcr.io/t1nn777/mern-ecom-backend
     tag: latest
     pullPolicy: IfNotPresent
   service:

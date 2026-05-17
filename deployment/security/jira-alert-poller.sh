@@ -23,6 +23,8 @@ LOOKBACK_MINUTES="${LOOKBACK_MINUTES:-5}"
 STATE_FILE="${STATE_FILE:-/tmp/fusion-jira-alert-poller.state}"
 KIBANA_URL="${KIBANA_URL:-http://localhost:5601}"
 MAX_ALERTS_PER_RUN="${MAX_ALERTS_PER_RUN:-10}"
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-5}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-20}"
 
 usage() {
   cat <<'USAGE'
@@ -81,6 +83,8 @@ query_count() {
   local kql="$1"
 
   curl -sS "${ES_URL}/${ES_INDEX_PATTERN}/_search" \
+    --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+    --max-time "$CURL_MAX_TIME" \
     -H "Content-Type: application/json" \
     -d "{
       \"size\": 1,
@@ -99,7 +103,7 @@ query_count() {
             {
               \"query_string\": {
                 \"query\": ${kql},
-                \"default_field\": \"message\",
+                \"fields\": [\"message\", \"log\"],
                 \"analyze_wildcard\": true
               }
             }
@@ -142,6 +146,8 @@ send_jira() {
     }')"
 
   curl -sS -o /dev/null -w "%{http_code}" \
+    --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+    --max-time "$CURL_MAX_TIME" \
     -X POST "$JIRA_WEBHOOK_URL" \
     -H "Content-Type: application/json" \
     -H "X-Automation-Webhook-Token: ${JIRA_WEBHOOK_TOKEN}" \
@@ -222,7 +228,7 @@ main() {
     "/api/search" \
     "400/500" \
     "fusion-injection-sim/1.0" \
-    '"/api/search" AND ("$ne" OR "$gt" OR "$regex" OR "<script>" OR "UNION SELECT" OR "DROP TABLE")' \
+    '"/api/search" AND ("$ne" OR "$gt" OR "$regex" OR "%24ne" OR "%24gt" OR "%24regex" OR " ne " OR " gt " OR " regex " OR "<script>" OR "UNION SELECT" OR "DROP TABLE")' \
     1 \
     "Suspicious search payload detected"
 
@@ -233,7 +239,7 @@ main() {
     "MongoDB-backed API" \
     "400/500" \
     "fusion-injection-sim/1.0" \
-    '"$ne" OR "$gt" OR "$regex" OR "$where"' \
+    '"$ne" OR "$gt" OR "$regex" OR "$where" OR "%24ne" OR "%24gt" OR "%24regex" OR "%24where" OR " ne " OR " gt " OR " regex " OR " where " OR "NoSQL injection"' \
     1 \
     "MongoDB operator pattern detected in request logs"
 

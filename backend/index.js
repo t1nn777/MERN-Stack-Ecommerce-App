@@ -64,6 +64,28 @@ mongoose
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+
+  res.on('finish', () => {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const clientIp = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor || req.socket.remoteAddress;
+
+    console.log(
+      JSON.stringify({
+        type: 'http_access',
+        method: req.method,
+        path: req.originalUrl,
+        status: res.statusCode,
+        userAgent: req.get('user-agent') || '',
+        ip: clientIp,
+        durationMs: Date.now() - startedAt,
+      })
+    );
+  });
+
+  next();
+});
 
 // Redirect root to /api-docs
 app.get('/', (req, res) => {

@@ -23,6 +23,15 @@ env:
 
 ## Apply
 
+Create the Elasticsearch CA Secret first if Elasticsearch uses a self-signed
+HTTP CA certificate:
+
+```bash
+kubectl create secret generic elasticsearch-ca \
+  -n logging \
+  --from-file=ca.crt=./http_ca.crt
+```
+
 ```bash
 kubectl apply -k deployment/efk/fluent-bit
 ```

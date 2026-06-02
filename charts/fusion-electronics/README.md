@@ -56,6 +56,41 @@ Optional:
 mongodb://fusion-electronics-mongodb:27017/Ecommerce-Products
 ```
 
+## Observability: Fluent Bit + MS Teams Alerts
+
+The chart can also deploy Fluent Bit and a MS Teams alert CronJob. These are
+disabled by default so normal app installs do not fail when Elasticsearch,
+Teams, or the Elasticsearch CA Secret are not ready.
+
+Create the Elasticsearch CA Secret in the observability namespace first:
+
+```bash
+kubectl create namespace logging
+kubectl create secret generic elasticsearch-ca \
+  -n logging \
+  --from-file=ca.crt=./http_ca.crt
+```
+
+Install or upgrade with observability enabled:
+
+```bash
+helm upgrade --install fusion-electronics charts/fusion-electronics \
+  --namespace fusion-ecommerce \
+  --create-namespace \
+  --set secrets.JWT_SECRET='your-jwt-secret' \
+  --set observability.enabled=true \
+  --set observability.elasticsearch.host=192.168.1.250 \
+  --set observability.elasticsearch.username=elastic \
+  --set observability.elasticsearch.password='your-elastic-password' \
+  --set observability.teamsAlert.webhookUrl='https://your-teams-webhook'
+```
+
+The Teams alert poller checks recent Elasticsearch logs for reconnaissance,
+brute-force login, search injection, NoSQL injection, product ID fuzzing,
+checkout abuse, backend health failures, and missing readiness success logs.
+It also uses the Kubernetes API to check pod readiness, restart counts,
+container waiting errors, unavailable deployments, and warning events.
+
 Create `KUBE_CONFIG_DATA` from a local kubeconfig:
 
 ```bash

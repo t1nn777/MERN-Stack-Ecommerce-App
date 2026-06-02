@@ -1,0 +1,40 @@
+{{- if and .Values.observability.enabled .Values.observability.fluentBit.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "fusion-electronics.fluentBitName" . }}
+  namespace: {{ include "fusion-electronics.observabilityNamespace" . }}
+  labels:
+    {{- include "fusion-electronics.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "fusion-electronics.fluentBitName" . }}
+  labels:
+    {{- include "fusion-electronics.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "fusion-electronics.fluentBitName" . }}
+  labels:
+    {{- include "fusion-electronics.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "fusion-electronics.fluentBitName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fusion-electronics.fluentBitName" . }}
+    namespace: {{ include "fusion-electronics.observabilityNamespace" . }}
+{{- end }}

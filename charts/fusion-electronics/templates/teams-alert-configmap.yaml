@@ -1,0 +1,12 @@
+{{- if and .Values.observability.enabled .Values.observability.teamsAlert.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fusion-electronics.teamsAlertName" . }}
+  namespace: {{ include "fusion-electronics.observabilityNamespace" . }}
+  labels:
+    {{- include "fusion-electronics.labels" . | nindent 4 }}
+data:
+  teams-alert-poller.sh: |
+{{ .Files.Get "files/teams-alert-poller.sh" | indent 4 }}
+{{- end }}

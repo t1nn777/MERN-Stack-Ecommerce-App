@@ -32,14 +32,20 @@ spec:
             - name: http
               containerPort: 80
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: {{ .Values.frontend.readinessProbe.path | quote }}
               port: http
             initialDelaySeconds: {{ .Values.frontend.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.frontend.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.frontend.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.frontend.readinessProbe.failureThreshold }}
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: {{ .Values.frontend.livenessProbe.path | quote }}
               port: http
             initialDelaySeconds: {{ .Values.frontend.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.frontend.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.frontend.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.frontend.livenessProbe.failureThreshold }}
           resources:
             {{- toYaml .Values.frontend.resources | nindent 12 }}

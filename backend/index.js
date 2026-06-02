@@ -5,6 +5,7 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const seedDB = require('./seed/productSeeds');
 const syncPinecone = require('./sync/syncPinecone');
+const healthRoutes = require('./routes/health');
 const productRoutes = require('./routes/products');
 const checkoutRoutes = require('./routes/checkout');
 const orderRoutes = require('./routes/orders');
@@ -86,6 +87,8 @@ app.use((req, res, next) => {
 
   next();
 });
+
+app.use('/', healthRoutes);
 
 // Redirect root to /api-docs
 app.get('/', (req, res) => {

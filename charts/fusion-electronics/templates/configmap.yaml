@@ -14,3 +14,5 @@ data:
   PINECONE_NAMESPACE: {{ .Values.backend.env.PINECONE_NAMESPACE | quote }}
   PINECONE_PURGE_ON_SYNC: {{ .Values.backend.env.PINECONE_PURGE_ON_SYNC | quote }}
   RECOMMENDATION_PREFER_WEAVIATE: {{ .Values.backend.env.RECOMMENDATION_PREFER_WEAVIATE | quote }}
+  HEALTH_CHECK_ENDPOINT: {{ .Values.backend.env.HEALTH_CHECK_ENDPOINT | quote }}
+  READINESS_CHECK_ENDPOINT: {{ .Values.backend.env.READINESS_CHECK_ENDPOINT | quote }}

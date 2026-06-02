@@ -1,0 +1,492 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: teams-alert-poller
+  namespace: logging
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: teams-alert-poller
+  namespace: fusion-ecommerce
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: teams-alert-poller
+  namespace: fusion-ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: teams-alert-poller
+subjects:
+  - kind: ServiceAccount
+    name: teams-alert-poller
+    namespace: logging
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: teams-alert-secrets
+  namespace: logging
+type: Opaque
+stringData:
+  TEAMS_WEBHOOK_URL: "PASTE_TEAMS_INCOMING_WEBHOOK_URL"
+  ES_USER: "elastic"
+  ES_PASSWORD: "PASTE_ELASTIC_PASSWORD"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: teams-alert-poller
+  namespace: logging
+data:
+  teams-alert-poller.sh: |
+    #!/usr/bin/env bash
+    set -u
+    
+    # Poll Elasticsearch and Kubernetes health signals, then send summarized alerts
+    # to Microsoft Teams via Incoming Webhook MessageCard JSON.
+    
+    ES_URL="${ES_URL:-https://192.168.1.250:9200}"
+    ES_INDEX_PATTERN="${ES_INDEX_PATTERN:-k8s-logs-mern-*}"
+    ES_USER="${ES_USER:-elastic}"
+    ES_PASSWORD="${ES_PASSWORD:-}"
+    ES_CA_CERT="${ES_CA_CERT:-}"
+    TEAMS_WEBHOOK_URL="${TEAMS_WEBHOOK_URL:-}"
+    K8S_NAMESPACE="${K8S_NAMESPACE:-fusion-ecommerce}"
+    LOOKBACK_MINUTES="${LOOKBACK_MINUTES:-5}"
+    STATE_FILE="${STATE_FILE:-/tmp/fusion-teams-alert-poller.state}"
+    KIBANA_URL="${KIBANA_URL:-http://localhost:5601}"
+    MAX_ALERTS_PER_RUN="${MAX_ALERTS_PER_RUN:-10}"
+    TEAMS_DRY_RUN="${TEAMS_DRY_RUN:-false}"
+    CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-5}"
+    CURL_MAX_TIME="${CURL_MAX_TIME:-20}"
+    RESTART_THRESHOLD="${RESTART_THRESHOLD:-3}"
+    
+    ALERTS_SENT=0
+    
+    usage() {
+      cat <<'USAGE'
+    Usage:
+      TEAMS_WEBHOOK_URL='https://...' ES_PASSWORD='elastic-password' ./deployment/security/teams-alert-poller.sh
+    
+    Local dry run:
+      TEAMS_DRY_RUN=true ./deployment/security/teams-alert-poller.sh
+    
+    Required tools:
+      curl, jq
+    
+    Optional tools:
+      kubectl, for Kubernetes health checks. If kubectl is absent, only Kubernetes
+      checks are skipped.
+    USAGE
+    }
+    
+    die() {
+      echo "error: $*" >&2
+      exit 1
+    }
+    
+    require_tools() {
+      command -v curl >/dev/null 2>&1 || die "curl is required"
+      command -v jq >/dev/null 2>&1 || die "jq is required"
+    }
+    
+    require_config() {
+      if [ "$TEAMS_DRY_RUN" != "true" ]; then
+        [ -n "$TEAMS_WEBHOOK_URL" ] || die "TEAMS_WEBHOOK_URL is required"
+      fi
+    }
+    
+    json_escape() {
+      jq -Rn --arg value "$1" '$value'
+    }
+    
+    time_bucket() {
+      date -u +"%Y-%m-%dT%H:%M"
+    }
+    
+    already_sent() {
+      local key="$1"
+      [ -f "$STATE_FILE" ] && grep -Fxq "$key" "$STATE_FILE"
+    }
+    
+    mark_sent() {
+      local key="$1"
+      mkdir -p "$(dirname "$STATE_FILE")"
+      printf '%s\n' "$key" >> "$STATE_FILE"
+      tail -n 500 "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    }
+    
+    query_count() {
+      local kql="$1"
+      local curl_args=()
+    
+      if [ -n "$ES_USER" ] || [ -n "$ES_PASSWORD" ]; then
+        curl_args+=("-u" "${ES_USER}:${ES_PASSWORD}")
+      fi
+    
+      if [ -n "$ES_CA_CERT" ]; then
+        curl_args+=("--cacert" "$ES_CA_CERT")
+      fi
+    
+      curl -sS "${curl_args[@]}" "${ES_URL}/${ES_INDEX_PATTERN}/_search" \
+        --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+        --max-time "$CURL_MAX_TIME" \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"size\": 1,
+          \"sort\": [{ \"@timestamp\": { \"order\": \"desc\", \"unmapped_type\": \"date\" } }],
+          \"query\": {
+            \"bool\": {
+              \"filter\": [
+                {
+                  \"range\": {
+                    \"@timestamp\": {
+                      \"gte\": \"now-${LOOKBACK_MINUTES}m\",
+                      \"lte\": \"now\"
+                    }
+                  }
+                },
+                {
+                  \"query_string\": {
+                    \"query\": ${kql},
+                    \"fields\": [\"message\", \"log\", \"path\", \"url\", \"status\", \"statusCode\", \"type\"],
+                    \"analyze_wildcard\": true
+                  }
+                }
+              ]
+            }
+          }
+        }"
+    }
+    
+    extract_count() {
+      local rule_id="$1"
+      local result="$2"
+      local count
+    
+      count="$(printf '%s' "$result" | jq -er '.hits.total.value // 0' 2>/dev/null)" || {
+        printf '%s: Elasticsearch query failed or returned invalid JSON, skipping rule\n' "$rule_id" >&2
+        return 1
+      }
+    
+      printf '%s' "$count"
+    }
+    
+    send_teams() {
+      local title="$1"
+      local severity="$2"
+      local source="$3"
+      local target="$4"
+      local sample="$5"
+      local count="$6"
+    
+      local color="0078D4"
+      case "$severity" in
+        Critical) color="D13438" ;;
+        High) color="FF8C00" ;;
+        Medium) color="F2C811" ;;
+        Low) color="107C10" ;;
+      esac
+    
+      local payload
+      payload="$(jq -n \
+        --arg title "$title" \
+        --arg severity "$severity" \
+        --arg source "$source" \
+        --arg target "$target" \
+        --arg sample "$sample" \
+        --arg count "$count" \
+        --arg window "${LOOKBACK_MINUTES} minutes" \
+        --arg kibana "$KIBANA_URL" \
+        --arg color "$color" \
+        '{
+          "@type": "MessageCard",
+          "@context": "https://schema.org/extensions",
+          "summary": $title,
+          "themeColor": $color,
+          "title": $title,
+          "sections": [
+            {
+              "facts": [
+                { "name": "Severity", "value": $severity },
+                { "name": "Source", "value": $source },
+                { "name": "Target", "value": $target },
+                { "name": "Matches", "value": $count },
+                { "name": "Window", "value": $window },
+                { "name": "Sample", "value": $sample },
+                { "name": "Kibana", "value": $kibana }
+              ],
+              "markdown": true
+            }
+          ]
+        }')"
+    
+      if [ "$TEAMS_DRY_RUN" = "true" ]; then
+        printf '%s\n' "$payload" >&2
+        printf 'DRY_RUN'
+        return 0
+      fi
+    
+      curl -sS -o /dev/null -w "%{http_code}" \
+        --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+        --max-time "$CURL_MAX_TIME" \
+        -X POST "$TEAMS_WEBHOOK_URL" \
+        -H "Content-Type: application/json" \
+        -d "$payload"
+    }
+    
+    check_log_rule() {
+      local rule_id="$1"
+      local title="$2"
+      local severity="$3"
+      local target="$4"
+      local query="$5"
+      local threshold="$6"
+      local sample="$7"
+    
+      [ "$ALERTS_SENT" -lt "$MAX_ALERTS_PER_RUN" ] || return 0
+    
+      local escaped_query result count key http_code
+      escaped_query="$(json_escape "$query")"
+      result="$(query_count "$escaped_query" 2>/dev/null)" || {
+        printf '%s: Elasticsearch query command failed, skipping rule\n' "$rule_id" >&2
+        return 0
+      }
+      count="$(extract_count "$rule_id" "$result")" || return 0
+    
+      if [ "$count" -lt "$threshold" ]; then
+        printf '%s: %s matches, below threshold %s\n' "$rule_id" "$count" "$threshold"
+        return 0
+      fi
+    
+      key="$(time_bucket):${rule_id}"
+      if already_sent "$key"; then
+        printf '%s: %s matches, already sent for current time bucket\n' "$rule_id" "$count"
+        return 0
+      fi
+    
+      http_code="$(send_teams "$title" "$severity" "Elasticsearch" "$target" "$sample" "$count")"
+      printf '%s: %s matches, Teams HTTP %s\n' "$rule_id" "$count" "$http_code"
+    
+      case "$http_code" in
+        200|201|202|204|DRY_RUN)
+          mark_sent "$key"
+          ALERTS_SENT=$((ALERTS_SENT + 1))
+          ;;
+        *) return 1 ;;
+      esac
+    }
+    
+    check_missing_log_rule() {
+      local rule_id="$1"
+      local title="$2"
+      local severity="$3"
+      local target="$4"
+      local query="$5"
+      local sample="$6"
+    
+      [ "$ALERTS_SENT" -lt "$MAX_ALERTS_PER_RUN" ] || return 0
+    
+      local escaped_query result count key http_code
+      escaped_query="$(json_escape "$query")"
+      result="$(query_count "$escaped_query" 2>/dev/null)" || {
+        printf '%s: Elasticsearch query command failed, skipping missing-signal rule\n' "$rule_id" >&2
+        return 0
+      }
+      count="$(extract_count "$rule_id" "$result")" || return 0
+    
+      if [ "$count" -gt 0 ]; then
+        printf '%s: %s success matches found\n' "$rule_id" "$count"
+        return 0
+      fi
+    
+      key="$(time_bucket):${rule_id}"
+      if already_sent "$key"; then
+        printf '%s: missing signal already sent for current time bucket\n' "$rule_id"
+        return 0
+      fi
+    
+      http_code="$(send_teams "$title" "$severity" "Elasticsearch" "$target" "$sample" "0")"
+      printf '%s: missing signal, Teams HTTP %s\n' "$rule_id" "$http_code"
+    
+      case "$http_code" in
+        200|201|202|204|DRY_RUN)
+          mark_sent "$key"
+          ALERTS_SENT=$((ALERTS_SENT + 1))
+          ;;
+        *) return 1 ;;
+      esac
+    }
+    
+    check_k8s_rule() {
+      local rule_id="$1"
+      local title="$2"
+      local severity="$3"
+      local target="$4"
+      local sample="$5"
+      local count="$6"
+    
+      [ "$ALERTS_SENT" -lt "$MAX_ALERTS_PER_RUN" ] || return 0
+      [ "$count" -gt 0 ] || {
+        printf '%s: 0 issue(s)\n' "$rule_id"
+        return 0
+      }
+    
+      local key http_code
+      key="$(time_bucket):${rule_id}:${target}:${sample}"
+      if already_sent "$key"; then
+        printf '%s: %s issue(s), already sent for current time bucket\n' "$rule_id" "$count"
+        return 0
+      fi
+    
+      http_code="$(send_teams "$title" "$severity" "Kubernetes" "$target" "$sample" "$count")"
+      printf '%s: %s issue(s), Teams HTTP %s\n' "$rule_id" "$count" "$http_code"
+    
+      case "$http_code" in
+        200|201|202|204|DRY_RUN)
+          mark_sent "$key"
+          ALERTS_SENT=$((ALERTS_SENT + 1))
+          ;;
+        *) return 1 ;;
+      esac
+    }
+    
+    check_kubernetes_health() {
+      command -v kubectl >/dev/null 2>&1 || {
+        echo "k8s-health: kubectl not found, skipping Kubernetes health checks"
+        return 0
+      }
+    
+      local pods_json
+      pods_json="$(kubectl get pods -n "$K8S_NAMESPACE" -l app=fusion-electronics -o json 2>/dev/null)" || {
+        printf 'k8s-health: unable to query pods in namespace %s, skipping Kubernetes health checks\n' "$K8S_NAMESPACE" >&2
+        return 0
+      }
+    
+      local unready_count restart_count waiting_count sample
+      unready_count="$(printf '%s' "$pods_json" | jq '[.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status != "True"))] | length')"
+      sample="$(printf '%s' "$pods_json" | jq -r '[.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status != "True")) | .metadata.name] | join(", ")')"
+      check_k8s_rule "pod-not-ready" "Fusion pod not ready" "High" "$K8S_NAMESPACE" "${sample:-No pod sample}" "$unready_count"
+    
+      restart_count="$(printf '%s' "$pods_json" | jq --argjson threshold "$RESTART_THRESHOLD" '[.items[].status.containerStatuses[]?.restartCount | select(. >= $threshold)] | length')"
+      sample="$(printf '%s' "$pods_json" | jq -r --argjson threshold "$RESTART_THRESHOLD" '[.items[] | select(any(.status.containerStatuses[]?; .restartCount >= $threshold)) | .metadata.name] | join(", ")')"
+      check_k8s_rule "pod-restarts" "Fusion pod restart threshold exceeded" "Medium" "$K8S_NAMESPACE" "${sample:-No pod sample}" "$restart_count"
+    
+      waiting_count="$(printf '%s' "$pods_json" | jq '[.items[].status.containerStatuses[]?.state.waiting.reason? | select(. == "CrashLoopBackOff" or . == "ImagePullBackOff" or . == "ErrImagePull")] | length')"
+      sample="$(printf '%s' "$pods_json" | jq -r '[.items[] | select(any(.status.containerStatuses[]?.state.waiting.reason?; . == "CrashLoopBackOff" or . == "ImagePullBackOff" or . == "ErrImagePull")) | .metadata.name] | join(", ")')"
+      check_k8s_rule "pod-waiting-error" "Fusion pod container waiting error" "High" "$K8S_NAMESPACE" "${sample:-No pod sample}" "$waiting_count"
+    
+      local deploys_json unavailable_count
+      deploys_json="$(kubectl get deployments -n "$K8S_NAMESPACE" -l app=fusion-electronics -o json 2>/dev/null)" || {
+        printf 'k8s-health: unable to query deployments in namespace %s, skipping deployment checks\n' "$K8S_NAMESPACE" >&2
+        deploys_json='{"items":[]}'
+      }
+      unavailable_count="$(printf '%s' "$deploys_json" | jq '[.items[] | select((.status.unavailableReplicas // 0) > 0)] | length')"
+      sample="$(printf '%s' "$deploys_json" | jq -r '[.items[] | select((.status.unavailableReplicas // 0) > 0) | "\(.metadata.name): unavailable=\(.status.unavailableReplicas)"] | join(", ")')"
+      check_k8s_rule "deployment-unavailable" "Fusion deployment has unavailable replicas" "High" "$K8S_NAMESPACE" "${sample:-No deployment sample}" "$unavailable_count"
+    
+      local events_json event_count
+      events_json="$(kubectl get events -n "$K8S_NAMESPACE" --field-selector type=Warning -o json 2>/dev/null)" || {
+        printf 'k8s-health: unable to query warning events in namespace %s, skipping event checks\n' "$K8S_NAMESPACE" >&2
+        events_json='{"items":[]}'
+      }
+      event_count="$(printf '%s' "$events_json" | jq '[.items[] | select(.involvedObject.kind == "Pod") | select(.involvedObject.name | test("^fusion-electronics-(backend|frontend)-"))] | length')"
+      sample="$(printf '%s' "$events_json" | jq -r '[.items[] | select(.involvedObject.kind == "Pod") | select(.involvedObject.name | test("^fusion-electronics-(backend|frontend)-")) | "\(.involvedObject.name): \(.reason)"] | unique | join(", ")')"
+      check_k8s_rule "pod-warning-events" "Fusion pod warning events detected" "Medium" "$K8S_NAMESPACE" "${sample:-No event sample}" "$event_count"
+    }
+    
+    check_security_rules() {
+      check_log_rule "recon" "Reconnaissance activity detected" "Medium" "Sensitive path probing" '"/.env" OR "/admin" OR "/wp-admin" OR "/api-docs/swagger.json"' 1 "Sensitive endpoint probing detected"
+      check_log_rule "brute-force-login" "Brute force login detected" "High" "/api/auth/login" '"/api/auth/login" AND ("400" OR "405" OR "Invalid credentials")' 10 "Multiple failed login attempts detected"
+      check_log_rule "search-injection" "Search injection detected" "High" "/api/search" '"/api/search" AND ("$ne" OR "$gt" OR "$regex" OR "%24ne" OR "%24gt" OR "%24regex" OR " ne " OR " gt " OR " regex " OR "<script>" OR "UNION SELECT" OR "DROP TABLE")' 1 "Suspicious search payload detected"
+      check_log_rule "nosql-injection" "NoSQL injection detected" "High" "MongoDB-backed API" '"$ne" OR "$gt" OR "$regex" OR "$where" OR "%24ne" OR "%24gt" OR "%24regex" OR "%24where" OR " ne " OR " gt " OR " regex " OR " where " OR "NoSQL injection"' 1 "MongoDB operator pattern detected in request logs"
+      check_log_rule "product-id-fuzzing" "Product ID fuzzing detected" "Medium" "/api/products/*" '"/api/products" AND ("not-an-object-id" OR "CastError" OR "404" OR "500")' 5 "Malformed product ID activity detected"
+      check_log_rule "checkout-abuse" "Checkout abuse detected" "High" "/api/checkout/create-order" '"/api/checkout/create-order" AND ("400" OR "Invalid card" OR "Invalid CVC" OR "Missing required fields")' 5 "Multiple checkout validation failures detected"
+    }
+    
+    check_http_health_rules() {
+      check_log_rule "backend-health-5xx" "Backend health endpoint returned 5xx" "High" "/health" '"/health" AND ("500" OR "502" OR "503" OR "504")' 1 "Backend /health returned a 5xx status"
+      check_log_rule "backend-ready-failure" "Backend readiness endpoint failed" "High" "/health/ready" '"/health/ready" AND ("500" OR "502" OR "503" OR "504" OR "not_ready")' 1 "Backend /health/ready failed or reported not_ready"
+      check_missing_log_rule "missing-readiness-success" "No backend readiness success logs found" "Medium" "/health/ready" '"/health/ready" AND "200"' "No successful /health/ready log found in this lookback window"
+    }
+    
+    main() {
+      if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+        usage
+        exit 0
+      fi
+    
+      require_tools
+      require_config
+      check_security_rules
+      check_http_health_rules
+      check_kubernetes_health
+    }
+    
+    main "$@"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: teams-alert-poller
+  namespace: logging
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: teams-alert-poller
+          restartPolicy: OnFailure
+          containers:
+            - name: teams-alert-poller
+              image: alpine/k8s:1.30.0
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/bash", "/scripts/teams-alert-poller.sh"]
+              env:
+                - name: ES_URL
+                  value: "https://192.168.1.250:9200"
+                - name: ES_INDEX_PATTERN
+                  value: "k8s-logs-mern-*"
+                - name: ES_CA_CERT
+                  value: "/fluent-bit/tls/ca.crt"
+                - name: K8S_NAMESPACE
+                  value: "fusion-ecommerce"
+                - name: KIBANA_URL
+                  value: "https://192.168.1.250:5601"
+              envFrom:
+                - secretRef:
+                    name: teams-alert-secrets
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+                - name: elasticsearch-ca
+                  mountPath: /fluent-bit/tls
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: teams-alert-poller
+                defaultMode: 0755
+            - name: elasticsearch-ca
+              secret:
+                # Prerequisite:
+                # kubectl create secret generic elasticsearch-ca -n logging --from-file=ca.crt=./http_ca.crt
+                secretName: elasticsearch-ca
+                items:
+                  - key: ca.crt
+                    path: ca.crt

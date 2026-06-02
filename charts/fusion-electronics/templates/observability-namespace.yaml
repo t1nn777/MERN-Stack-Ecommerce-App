@@ -1,0 +1,8 @@
+{{- if and .Values.observability.enabled .Values.observability.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "fusion-electronics.observabilityNamespace" . }}
+  labels:
+    {{- include "fusion-electronics.labels" . | nindent 4 }}
+{{- end }}

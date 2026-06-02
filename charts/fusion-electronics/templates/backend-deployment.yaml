@@ -36,15 +36,29 @@ spec:
                 name: {{ include "fusion-electronics.configName" . }}
             - secretRef:
                 name: {{ include "fusion-electronics.secretName" . }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.backend.startupProbe.path | quote }}
+              port: http
+            initialDelaySeconds: {{ .Values.backend.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.startupProbe.failureThreshold }}
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: {{ .Values.backend.readinessProbe.path | quote }}
               port: http
             initialDelaySeconds: {{ .Values.backend.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.backend.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.readinessProbe.failureThreshold }}
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: {{ .Values.backend.livenessProbe.path | quote }}
               port: http
             initialDelaySeconds: {{ .Values.backend.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.backend.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.livenessProbe.failureThreshold }}
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}

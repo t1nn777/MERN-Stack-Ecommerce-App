@@ -1,0 +1,91 @@
+{{- if and .Values.observability.enabled .Values.observability.fluentBit.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "fusion-electronics.fluentBitName" . }}
+  namespace: {{ include "fusion-electronics.observabilityNamespace" . }}
+  labels:
+    {{- include "fusion-electronics.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fluent-bit
+spec:
+  selector:
+    matchLabels:
+      {{- include "fusion-electronics.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: fluent-bit
+  template:
+    metadata:
+      labels:
+        {{- include "fusion-electronics.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: fluent-bit
+    spec:
+      serviceAccountName: {{ include "fusion-electronics.fluentBitName" . }}
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: fluent-bit
+          image: "{{ .Values.observability.fluentBit.image.repository }}:{{ .Values.observability.fluentBit.image.tag }}"
+          imagePullPolicy: {{ .Values.observability.fluentBit.image.pullPolicy }}
+          env:
+            - name: FLUENT_ELASTICSEARCH_HOST
+              value: {{ .Values.observability.elasticsearch.host | quote }}
+            - name: FLUENT_ELASTICSEARCH_PORT
+              value: {{ .Values.observability.elasticsearch.port | quote }}
+            - name: FLUENT_ELASTICSEARCH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fusion-electronics.fluentBitName" . }}-elastic
+                  key: username
+            - name: FLUENT_ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fusion-electronics.fluentBitName" . }}-elastic
+                  key: password
+          ports:
+            - name: http
+              containerPort: 2020
+          resources:
+            {{- toYaml .Values.observability.fluentBit.resources | nindent 12 }}
+          volumeMounts:
+            - name: varlog
+              mountPath: /var/log
+            - name: containers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: config
+              mountPath: /fluent-bit/etc/fluent-bit.conf
+              subPath: fluent-bit.conf
+            - name: config
+              mountPath: /fluent-bit/etc/parsers.conf
+              subPath: parsers.conf
+            - name: db
+              mountPath: /var/log/fluent-bit
+            - name: elasticsearch-ca
+              mountPath: /fluent-bit/tls
+              readOnly: true
+      volumes:
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: containers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: DirectoryOrCreate
+        - name: config
+          configMap:
+            name: {{ include "fusion-electronics.fluentBitName" . }}-config
+        - name: db
+          hostPath:
+            path: /var/log/fluent-bit
+            type: DirectoryOrCreate
+        - name: elasticsearch-ca
+          secret:
+            secretName: {{ .Values.observability.elasticsearch.existingCaSecret }}
+            items:
+              - key: {{ .Values.observability.elasticsearch.caFileKey }}
+                path: ca.crt
+{{- end }}

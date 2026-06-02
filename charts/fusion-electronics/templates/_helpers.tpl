@@ -72,3 +72,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "mongodb://%s:%v/%s" $host $port $db -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "fusion-electronics.observabilityNamespace" -}}
+{{- default "logging" .Values.observability.namespace -}}
+{{- end -}}
+
+{{- define "fusion-electronics.fluentBitName" -}}
+{{- printf "%s-fluent-bit" (include "fusion-electronics.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "fusion-electronics.teamsAlertName" -}}
+{{- printf "%s-teams-alert" (include "fusion-electronics.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}

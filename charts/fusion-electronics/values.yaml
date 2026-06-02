@@ -23,11 +23,17 @@ frontend:
       cpu: 500m
       memory: 512Mi
   livenessProbe:
+    path: /
     initialDelaySeconds: 20
     periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
   readinessProbe:
+    path: /
     initialDelaySeconds: 5
     periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
 
 backend:
   replicaCount: 1
@@ -48,6 +54,8 @@ backend:
     PINECONE_NAMESPACE: ecommerce-products
     PINECONE_PURGE_ON_SYNC: "false"
     RECOMMENDATION_PREFER_WEAVIATE: "false"
+    HEALTH_CHECK_ENDPOINT: /health
+    READINESS_CHECK_ENDPOINT: /health/ready
   resources:
     requests:
       cpu: 100m
@@ -56,14 +64,26 @@ backend:
       cpu: 500m
       memory: 512Mi
   livenessProbe:
+    path: /health
     initialDelaySeconds: 30
     periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
   readinessProbe:
+    path: /health/ready
     initialDelaySeconds: 10
     periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startupProbe:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 18
 
 secrets:
-  JWT_SECRET: antoanmangnangcao-nhom1-10diem
+  JWT_SECRET: ""
   PINECONE_API_KEY: ""
   PINECONE_HOST: ""
   PINECONE_INDEX: ecommerce-products
@@ -128,3 +148,47 @@ networkPolicy:
   enabled: false
   ingressNamespaceLabel:
     name: ingress-nginx
+
+observability:
+  enabled: false
+  namespace: logging
+  createNamespace: true
+
+  elasticsearch:
+    host: "192.168.1.250"
+    port: "9200"
+    username: elastic
+    password: ""
+    existingCaSecret: elasticsearch-ca
+    caFileKey: ca.crt
+
+  fluentBit:
+    enabled: true
+    image:
+      repository: fluent/fluent-bit
+      tag: "3.2"
+      pullPolicy: IfNotPresent
+    logstashPrefix: k8s-logs-mern
+    namespaceFilter: fusion-ecommerce
+    podNameRegex: "^(fusion-electronics-(backend|frontend)-|attack-log-generator$)"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
+
+  teamsAlert:
+    enabled: true
+    image:
+      repository: alpine/k8s
+      tag: "1.30.0"
+      pullPolicy: IfNotPresent
+    schedule: "*/5 * * * *"
+    webhookUrl: ""
+    esIndexPattern: "k8s-logs-mern-*"
+    kibanaUrl: "https://192.168.1.250:5601"
+    lookbackMinutes: "5"
+    maxAlertsPerRun: "10"
+    restartThreshold: "3"
+    dryRun: "false"

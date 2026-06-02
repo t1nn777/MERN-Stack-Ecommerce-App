@@ -1,0 +1,67 @@
+{{- if and .Values.observability.enabled .Values.observability.teamsAlert.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "fusion-electronics.teamsAlertName" . }}
+  namespace: {{ include "fusion-electronics.observabilityNamespace" . }}
+  labels:
+    {{- include "fusion-electronics.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.observability.teamsAlert.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: {{ include "fusion-electronics.teamsAlertName" . }}
+          restartPolicy: OnFailure
+          containers:
+            - name: teams-alert-poller
+              image: "{{ .Values.observability.teamsAlert.image.repository }}:{{ .Values.observability.teamsAlert.image.tag }}"
+              imagePullPolicy: {{ .Values.observability.teamsAlert.image.pullPolicy }}
+              command: ["/bin/bash", "/scripts/teams-alert-poller.sh"]
+              env:
+                - name: ES_URL
+                  value: "https://{{ .Values.observability.elasticsearch.host }}:{{ .Values.observability.elasticsearch.port }}"
+                - name: ES_INDEX_PATTERN
+                  value: {{ .Values.observability.teamsAlert.esIndexPattern | quote }}
+                - name: ES_CA_CERT
+                  value: "/fluent-bit/tls/ca.crt"
+                - name: K8S_NAMESPACE
+                  value: {{ include "fusion-electronics.namespace" . | quote }}
+                - name: K8S_LABEL_SELECTOR
+                  value: "app.kubernetes.io/name={{ include "fusion-electronics.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+                - name: KIBANA_URL
+                  value: {{ .Values.observability.teamsAlert.kibanaUrl | quote }}
+                - name: LOOKBACK_MINUTES
+                  value: {{ .Values.observability.teamsAlert.lookbackMinutes | quote }}
+                - name: MAX_ALERTS_PER_RUN
+                  value: {{ .Values.observability.teamsAlert.maxAlertsPerRun | quote }}
+                - name: RESTART_THRESHOLD
+                  value: {{ .Values.observability.teamsAlert.restartThreshold | quote }}
+                - name: TEAMS_DRY_RUN
+                  value: {{ .Values.observability.teamsAlert.dryRun | quote }}
+              envFrom:
+                - secretRef:
+                    name: {{ include "fusion-electronics.teamsAlertName" . }}-secrets
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+                - name: elasticsearch-ca
+                  mountPath: /fluent-bit/tls
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: {{ include "fusion-electronics.teamsAlertName" . }}
+                defaultMode: 0755
+            - name: elasticsearch-ca
+              secret:
+                secretName: {{ .Values.observability.elasticsearch.existingCaSecret }}
+                items:
+                  - key: {{ .Values.observability.elasticsearch.caFileKey }}
+                    path: ca.crt
+{{- end }}
